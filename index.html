@@ -141,7 +141,7 @@
     <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
   </section>
 
-  <footer>Pure tones · no tremolo · loops forever · v23</footer>
+  <footer>Pure tones · no tremolo · loops forever · v24</footer>
 </div>
 <div id="dim">tap to wake</div>
 <audio id="player" playsinline preload="auto"></audio>
@@ -584,12 +584,16 @@ function waterStop(fast) {
   waterSrc = null;
 }
 // A single distant drip: very short, high, quick upward "plip" with a little room on it
+let dripLevel = 0.85;
 function playDrip(t) {
   const o = ctx.createOscillator(), g = ctx.createGain(), s = ctx.createGain();
   const f0 = 1850, len = 0.011;                       // same pitch, same drop, every time
   o.frequency.setValueAtTime(f0, t);
   o.frequency.exponentialRampToValueAtTime(f0 * 1.45, t + len);
-  const peak = 0.009;
+  // natural variation: each drop between ~55% and 115% of the old level (about -5 dB to +1 dB),
+  // with a slow drift so the leak gently swells and eases rather than jumping around
+  dripLevel = Math.max(0.6, Math.min(1.1, dripLevel + (Math.random() - 0.5) * 0.25));
+  const peak = 0.009 * dripLevel * (0.88 + Math.random() * 0.17);
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(peak, t + 0.0015);
   g.gain.setTargetAtTime(0, t + 0.0015, 0.012);
