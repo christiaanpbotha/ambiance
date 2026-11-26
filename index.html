@@ -183,7 +183,13 @@ const PROG_MIX = {
   deep:    {tempo:58, pad:68, bass:70, keys:28, spark:10, pulse:45, pattern:'sparse', space:55, warmth:68},
   lofi:    {tempo:70, pad:60, bass:75, keys:50, spark:16, pulse:28, pattern:'wander', space:45, warmth:76},
   ocean:   {tempo:48, pad:80, bass:55, keys:35, spark:24, pulse:0,  pattern:'sparse', space:88, warmth:62},
+  moonlit: {tempo:56, pad:75, bass:60, keys:38, spark:30, pulse:0,  pattern:'wander', space:75, warmth:65},
+  canon:   {tempo:60, pad:60, bass:55, keys:55, spark:22, pulse:0,  pattern:'rise',   space:65, warmth:50},
+  floating:{tempo:58, pad:75, bass:55, keys:40, spark:25, pulse:0,  pattern:'flow',   space:75, warmth:58},
+  sunrise: {tempo:62, pad:65, bass:60, keys:50, spark:35, pulse:15, pattern:'flow',   space:62, warmth:45},
+  still:   {tempo:50, pad:82, bass:48, keys:28, spark:18, pulse:0,  pattern:'sparse', space:85, warmth:66},
 };
+function mixFor(id) { const v = {tempo: DEFAULTS.tempo}; for (const k of MIX_KEYS) v[k] = DEFAULTS[k]; return Object.assign(v, PROG_MIX[id] || {}); }
 const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'];
 
 /* ---------- Settings ---------- */
@@ -642,7 +648,7 @@ function renderProgs() {
     const b = document.createElement('button');
     b.className = 'prog' + (p.id === S.prog ? ' on' : '');
     b.innerHTML = '<b>' + p.name + '</b><span>' + p.roman + '</span>';
-    b.onclick = () => { S.prog = p.id; save(); renderProgs(); setUI(); applyMix(); restartProgression(); mediaSession(); };
+    b.onclick = () => applyScene(Object.assign({prog: p.id}, mixFor(p.id)));
     $('progGrid').appendChild(b);
   });
 }
@@ -708,9 +714,7 @@ function applyScene(vals) {
 }
 // Reset mix: loads the tuned mix for the current progression (keeps progression, key and volume)
 $('resetBtn').onclick = () => {
-  const vals = {tempo: DEFAULTS.tempo}; for (const k of MIX_KEYS) vals[k] = DEFAULTS[k];
-  Object.assign(vals, PROG_MIX[S.prog] || {});
-  applyScene(vals);
+  applyScene(mixFor(S.prog));
   const b = $('resetBtn'); b.textContent = '✓ Mix reset'; setTimeout(() => b.textContent = '↺ Reset mix', 1500);
 };
 renderProgs(); renderKeys(); renderPatterns(); renderSleep(); setUI();
