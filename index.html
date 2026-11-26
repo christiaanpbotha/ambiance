@@ -198,10 +198,11 @@ const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:55, keys:45, spark:25, pulse:20,
-  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:false};
+  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:true};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
 const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); } catch(e) {} };
+if (!S.waterOnce) { S.water = true; S.waterOnce = true; save(); }   // switch water on once for existing installs
 
 /* ---------- Audio engine ---------- */
 let ctx = null, out = {}, waves = {}, playing = false;
