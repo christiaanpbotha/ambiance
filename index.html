@@ -157,8 +157,8 @@ const NOTE_NAMES = ['C','D♭','D','E♭','E','F','F♯','G','A♭','A','B♭','
 
 // [semitones from tonic, chord type, bars]
 const PROGS = [
-  {id:'echo', name:'Echo ♡', roman:'Iadd9 · Vsus4 · Vsus2 · IV6/9 · vi(add9) · IVsus2', echo:true, open:true, calm:true,
-   chords:[[0,'add9',4],[7,'sus4',2],[7,'sus2',2],[5,'six9',4],[9,'madd9',2],[5,'sus2',2]]},
+  {id:'echo', name:'Echo ♡', roman:'Iadd9 · IV6/9 · vi(add9) · IVsus2 · Vsus4 · V(add9)', echo:true, open:true, calm:true,
+   chords:[[0,'add9',4],[5,'six9',4],[9,'madd9',2],[5,'sus2',2],[7,'sus4',2],[7,'add9',2]]},
   {id:'lullaby', name:'Lullaby', roman:'I · vi · IV · V', chords:[[0,'add9',2],[9,'m7',2],[5,'maj7',2],[7,'sus2',1],[7,'add9',1]]},
   {id:'drift', name:'Drift', roman:'Imaj9 · IVmaj9', chords:[[0,'maj9',2],[5,'maj9',2]]},
   {id:'moonlit', name:'Moonlit', roman:'i · VI · III · VII', chords:[[0,'m9',2],[8,'maj7',2],[3,'maj7',2],[10,'add9',2]]},
@@ -193,7 +193,7 @@ function mixFor(id) { const v = {tempo: DEFAULTS.tempo}; for (const k of MIX_KEY
 const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'];
 
 /* ---------- Settings ---------- */
-const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:65, keys:45, spark:25, pulse:20,
+const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:55, keys:45, spark:25, pulse:20,
   pattern:'flow', master:75, space:60, warmth:55, wake:false};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
@@ -279,7 +279,8 @@ function initAudio() {
   out.echoTone.connect(out.echoWet); out.echoWet.connect(out.keys);
   out.keysLP.connect(out.echoIn); out.spark.connect(out.echoIn);
   out.padLP = ctx.createBiquadFilter(); out.padLP.type = 'lowpass'; out.padLP.frequency.value = 1400; out.padLP.Q.value = 0.3;
-  out.padLP.connect(out.pad);
+  out.padSwell = ctx.createGain(); out.padSwell.gain.value = 1;
+  out.padLP.connect(out.padSwell); out.padSwell.connect(out.pad);
   applyMix(true);
 
   worker = new Worker(URL.createObjectURL(new Blob(
@@ -385,10 +386,10 @@ function releasePads(t) {
 function playBass(midi, t, dur, vel) {
   const f = mtof(midi);
   const v = voice(waves.bass, f, t, out.bass);
-  const peak = 0.24 * vel;
+  const peak = 0.14 * vel, atk = 0.09;
   v.g.gain.setValueAtTime(0, t);
-  v.g.gain.linearRampToValueAtTime(peak, t + 0.035);
-  v.g.gain.setTargetAtTime(peak * 0.55, t + 0.035, 0.5);
+  v.g.gain.linearRampToValueAtTime(peak, t + atk);
+  v.g.gain.setTargetAtTime(peak * 0.6, t + atk, 0.6);
   v.g.gain.setTargetAtTime(0, t + dur, 0.25);
   v.o.stop(t + dur + 1.0);
 }
@@ -450,7 +451,27 @@ function scheduleStep(s, t) {
     const upper = prog().open ? chordNotes.filter(n => n >= 55).map(n => n + 12).concat(chordNotes.filter(n => n < 55).map(n => n + 24))
                               : chordNotes.map(n => n + 12);
     arpNotes = [...new Set([...upper, upper[0] + 12, (upper[1] || upper[0]) + 12])].filter(n => n <= 88).sort((a, b) => a - b);
-    if (S.pad > 0) playPad(chordNotes, t, chordSteps * stepDur());
+    const chs = prog().chords, dur = chordSteps * stepDur();
+    if (i === chs.length - 1) {
+      // TENSION: the last chord before home slowly brightens and swells
+      out.padLP.frequency.setTargetAtTime(2400, t, dur / 2.5);
+      out.padSwell.gain.setTargetAtTime(1.3, t, dur / 2.5);
+    } else if (i === 0 && s > 0) {
+      // RELEASE ("ahhh"): bloom on arrival, then settle warm and dark over several seconds
+      out.padLP.frequency.setTargetAtTime(1000, t + 0.4, 3);
+      out.padSwell.gain.setTargetAtTime(1, t + 0.6, 3.5);
+      out.verbReturn.gain.setTargetAtTime(Math.min(1.6, S.space / 100 * 1.6 * 1.35), t, 0.5);
+      out.verbReturn.gain.setTargetAtTime(S.space / 100 * 1.6, t + 4, 3);
+    } else if (i === 1) {
+      out.padLP.frequency.setTargetAtTime(1400, t, 4);
+    }
+    if (S.pad > 0) playPad(chordNotes, t, dur);
+    if (i === 0 && s > 0 && S.spark > 0) {     // a soft high chime of the home chord on arrival
+      const r = chordNotes[0] + 24;
+      playSpark(Math.min(r, 93), t + 0.25);
+      playSpark(Math.min(r + 7, 96), t + 0.55);
+      playSpark(Math.min(r + 14, 98), t + 0.95);
+    }
     const label = chordName(chord);
     const delay = Math.max(0, (t - ctx.currentTime) * 1000);
     setTimeout(() => setChordLabel(label), delay);
@@ -458,18 +479,21 @@ function scheduleStep(s, t) {
   }
 
   const bassRoot = 36 + ((S.key + chord[0]) % 12);  // C2..B2
+  const nCh = prog().chords.length;
+  const holdBreath = i === nCh - 1 && pos >= chordSteps - 8;   // last bar before home: hush
+  const arrival = i === 0 && pos < 3 && s > 8;                  // let the home chord land alone
   const calm = prog().calm;
   if (S.bass > 0 && calm) {
     if (bar === 0) playBass(bassRoot, t, stepDur() * 7.5, 0.9);
   } else if (S.bass > 0) {
     if (bar === 0) playBass(bassRoot, t, stepDur() * 4.6, 1);
-    else if (bar === 5) playBass(bassRoot + (Math.random() < 0.3 ? 12 : 0), t, stepDur() * 2.4, 0.6);
-    else if (bar === 7 && pos === chordSteps - 1 && Math.random() < 0.4) playBass(bassRoot + 7, t, stepDur() * 0.9, 0.4);
+    else if (bar === 5 && !holdBreath) playBass(bassRoot + (Math.random() < 0.3 ? 12 : 0), t, stepDur() * 2.4, 0.6);
+    else if (bar === 7 && pos === chordSteps - 1 && !holdBreath && Math.random() < 0.4) playBass(bassRoot + 7, t, stepDur() * 0.9, 0.4);
   }
 
-  if (S.pulse > 0 && (bar === 0 || (bar === 4 && !calm))) playPulse(t, bar === 0 ? 1 : 0.6);
+  if (S.pulse > 0 && !holdBreath && (bar === 0 || (bar === 4 && !calm))) playPulse(t, bar === 0 ? 1 : 0.6);
 
-  if (S.keys > 0 && arpNotes.length) {
+  if (S.keys > 0 && arpNotes.length && !holdBreath && !arrival) {
     const pat = S.pattern;
     let play = true, n;
     if (calm) play = (bar === 0 || bar === 3 || bar === 6) && Math.random() < (bar === 0 ? 0.9 : 0.45);
@@ -491,7 +515,7 @@ function scheduleStep(s, t) {
     }
   }
 
-  if (S.spark > 0 && bar === 0 && Math.random() < 0.45) {
+  if (S.spark > 0 && bar === 0 && !holdBreath && !(i === 0 && pos === 0) && Math.random() < 0.45) {
     const n = chordNotes[Math.floor(Math.random() * chordNotes.length)] + 24;
     playSpark(Math.min(n, 96), t + stepDur() * Math.floor(Math.random() * 6));
   }
@@ -584,6 +608,7 @@ function restartProgression() {
   m.setTargetAtTime(0, now, 0.06);                         // quick, click-free duck
   for (const r of live) { try { r.o.stop(now + gap - 0.05); } catch (e) {} }   // ringing + already-queued notes
   activePads = [];
+  out.padLP.frequency.setTargetAtTime(1400, now, 0.1); out.padSwell.gain.setTargetAtTime(1, now, 0.1);
   // flush the echo so old notes don't repeat over the new key
   out.echoFb.gain.cancelScheduledValues(now); out.echoFb.gain.setValueAtTime(0, now);
   out.echoWet.gain.cancelScheduledValues(now); out.echoWet.gain.setValueAtTime(0, now);
