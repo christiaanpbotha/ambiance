@@ -360,12 +360,12 @@ function voicing(chord) {
 // that stays quiet until the chord changes, so the chord doesn't sit loud and overstay.
 function padCurve(peak, atk, dur) {
   const n = 256, c = new Float32Array(n);
-  const hold = 0.7, bed = 0.28;                                  // peak plateau (s), bed level
-  const fallStart = atk + hold, fall = Math.max(0.5, Math.min(4, (dur - fallStart) * 0.75));
+  const hold = 0.8, bed = 0.42;                                  // peak plateau (s), bed level
+  const fallStart = atk + hold, fall = Math.max(0.5, Math.min(6, (dur - fallStart) * 0.9));
   for (let j = 0; j < n; j++) {
     const time = (j / (n - 1)) * (dur - 0.01);
     let v;
-    if (time < atk) v = time / atk;                              // rise (unchanged)
+    if (time < atk) v = 0.5 - 0.5 * Math.cos(Math.PI * time / atk);   // slow, smooth crescendo
     else if (time < fallStart) v = 1;                            // brief peak
     else if (time < fallStart + fall) v = bed + (1 - bed) * 0.5 * (1 + Math.cos(Math.PI * (time - fallStart) / fall));
     else v = bed;
@@ -376,7 +376,7 @@ function padCurve(peak, atk, dur) {
 
 function playPad(notes, t, dur) {
   const per = 0.085 / Math.sqrt(notes.length);
-  const atk = Math.min(2.4, dur * 0.35), rel = 1.6;
+  const atk = Math.min(3.4, dur * 0.45), rel = 1.6;
   notes.forEach((n, i) => {
     const pan = notes.length > 1 ? (i / (notes.length - 1) - 0.5) * 0.7 : 0;
     const v = voice(waves.warm, mtof(n), t, out.padLP, pan);
