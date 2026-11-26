@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0b0e1a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Ambiance</title>
+<title>Ambience</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -75,7 +75,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>AMBIANCE</h1>
+    <h1>AMBIENCE</h1>
     <button class="iconbtn" id="dimBtn">Dim screen</button>
   </header>
 
@@ -567,7 +567,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 function mediaSession() {
   if (!('mediaSession' in navigator)) return;
   navigator.mediaSession.metadata = new MediaMetadata({
-    title: prog().name, artist: 'Ambiance', album: NOTE_NAMES[S.key] + ' · ' + S.tempo + ' bpm',
+    title: prog().name, artist: 'Ambience', album: NOTE_NAMES[S.key] + ' · ' + S.tempo + ' bpm',
     artwork: [{src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png'}]
   });
   navigator.mediaSession.setActionHandler('play', () => start());

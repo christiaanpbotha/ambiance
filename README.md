@@ -1,4 +1,4 @@
-# Ambiance
+# Ambience
 
 A sleep/background music app: soft pads, warm bass and gentle keys looping over chord progressions. Pure tones only, with no tremolo or wobble.
 
