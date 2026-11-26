@@ -141,7 +141,7 @@
     <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
   </section>
 
-  <footer>Pure tones · no tremolo · loops forever · v22</footer>
+  <footer>Pure tones · no tremolo · loops forever · v23</footer>
 </div>
 <div id="dim">tap to wake</div>
 <audio id="player" playsinline preload="auto"></audio>
@@ -505,6 +505,7 @@ function scheduleStep(s, t) {
     curChord = i;
   }
 
+  if (waterSrc && s % 4 === 2) playDrip(t);             // the leaky shower head: beats 2 and 4
   const bassRoot = 36 + ((S.key + chord[0]) % 12);  // C2..B2
   const nCh = prog().chords.length;
   const holdBreath = i === nCh - 1 && pos >= chordSteps - 8;   // last bar before home: hush
@@ -585,10 +586,10 @@ function waterStop(fast) {
 // A single distant drip: very short, high, quick upward "plip" with a little room on it
 function playDrip(t) {
   const o = ctx.createOscillator(), g = ctx.createGain(), s = ctx.createGain();
-  const f0 = 1300 + Math.random() * 1100, len = 0.008 + Math.random() * 0.008;
+  const f0 = 1850, len = 0.011;                       // same pitch, same drop, every time
   o.frequency.setValueAtTime(f0, t);
-  o.frequency.exponentialRampToValueAtTime(f0 * (1.35 + Math.random() * 0.25), t + len);
-  const peak = 0.006 + Math.random() * 0.006;
+  o.frequency.exponentialRampToValueAtTime(f0 * 1.45, t + len);
+  const peak = 0.009;
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(peak, t + 0.0015);
   g.gain.setTargetAtTime(0, t + 0.0015, 0.012);
@@ -600,11 +601,6 @@ function playDrip(t) {
 
 function scheduleWater(until) {
   if (!waterSrc) return;
-  while (nextDrop < until) {
-    playDrip(nextDrop);
-    if (Math.random() < 0.25) playDrip(nextDrop + 0.18 + Math.random() * 0.5);   // now and then a second drop
-    nextDrop += 3 + Math.random() * 9;
-  }
   if (nextWaterMove < until) {                       // the stream slowly shifts character (no audio-rate modulation)
     waterBP.frequency.setTargetAtTime(650 + Math.random() * 900, nextWaterMove, 0.8);
     nextWaterMove += 1 + Math.random() * 1.5;
