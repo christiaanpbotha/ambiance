@@ -171,7 +171,7 @@ const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); 
 /* ---------- Audio engine ---------- */
 let ctx = null, out = {}, waves = {}, playing = false;
 let step = 0, nextTime = 0, worker = null, activePads = [], lastPadCenter = 60;
-let sleepEnd = 0, sleepFading = false, wakeLock = null, audioEl = null;
+let sleepEnd = 0, sleepFading = false, wakeLock = null;
 
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 const prog = () => PROGS.find(p => p.id === S.prog) || PROGS[0];
@@ -194,7 +194,12 @@ function buildReverb(seconds = 5) {
       d[i] = lp * Math.pow(1 - t, 2.6) * (i < rate * 0.02 ? i / (rate * 0.02) : 1);
     }
   }
+  let e = 0;
+  for (let ch = 0; ch < 2; ch++) for (const v of buf.getChannelData(ch)) e += v * v;
+  const norm = 1 / Math.sqrt(e / 2);
+  for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < len; i++) d[i] *= norm * 0.9; }
   const conv = ctx.createConvolver();
+  conv.normalize = false;
   conv.buffer = buf;
   return conv;
 }
@@ -203,30 +208,28 @@ function initAudio() {
   ctx = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'playback'});
   waves.warm = buildWave([1, 0.28, 0.07, 0.02]);            // pad: mostly fundamental
   waves.keys = buildWave([1, 0.42, 0.14, 0.06, 0.025, 0.01]); // soft electric-piano-ish
-  waves.bass = buildWave([1, 0.32, 0.06]);                  // sub + a touch of 2nd so phones hear it
+  waves.bass = buildWave([1, 0.5, 0.12, 0.03]);                  // sub + a touch of 2nd so phones hear it
 
   out.master = ctx.createGain(); out.master.gain.value = 0;
+  out.hp = ctx.createBiquadFilter(); out.hp.type = 'highpass'; out.hp.frequency.value = 42; out.hp.Q.value = 0.7;
+  out.hp2 = ctx.createBiquadFilter(); out.hp2.type = 'highpass'; out.hp2.frequency.value = 42; out.hp2.Q.value = 0.7;
   out.comp = ctx.createDynamicsCompressor();
-  out.comp.threshold.value = -20; out.comp.ratio.value = 3; out.comp.attack.value = 0.05; out.comp.release.value = 0.4;
+  out.comp.threshold.value = -18; out.comp.knee.value = 12; out.comp.ratio.value = 2.5; out.comp.attack.value = 0.03; out.comp.release.value = 0.5;
+  out.limiter = ctx.createDynamicsCompressor();
+  out.limiter.threshold.value = -9; out.limiter.knee.value = 0; out.limiter.ratio.value = 20; out.limiter.attack.value = 0.002; out.limiter.release.value = 0.25;
+  out.trim = ctx.createGain(); out.trim.gain.value = 0.7;
   out.warmth = ctx.createBiquadFilter(); out.warmth.type = 'lowpass'; out.warmth.Q.value = 0.5;
   out.dry = ctx.createGain();
-  out.verb = buildReverb(5.5);
+  out.verb = buildReverb(3.8);
   out.verbFilter = ctx.createBiquadFilter(); out.verbFilter.type = 'lowpass'; out.verbFilter.frequency.value = 3200;
   out.verbReturn = ctx.createGain();
   out.send = ctx.createGain();
 
   out.dry.connect(out.warmth);
   out.send.connect(out.verb); out.verb.connect(out.verbFilter); out.verbFilter.connect(out.verbReturn); out.verbReturn.connect(out.warmth);
-  out.warmth.connect(out.comp); out.comp.connect(out.master);
+  out.warmth.connect(out.hp); out.hp.connect(out.hp2); out.hp2.connect(out.trim); out.trim.connect(out.comp); out.comp.connect(out.limiter); out.limiter.connect(out.master);
 
-  // Route through an <audio> element so playback survives screen lock / backgrounding where supported.
-  try {
-    const dest = ctx.createMediaStreamDestination();
-    out.master.connect(dest);
-    audioEl = new Audio();
-    audioEl.srcObject = dest.stream;
-    audioEl.setAttribute('playsinline', '');
-  } catch (e) { audioEl = null; }
+  out.master.connect(ctx.destination);
 
   // Per-layer buses
   for (const k of ['pad', 'bass', 'keys', 'spark', 'pulse']) {
@@ -267,7 +270,7 @@ function applyMix(instant) {
   out.warmth.frequency.setTargetAtTime(9000 * Math.pow(0.12, S.warmth / 100) + 500, now, tc);
   if (playing && !sleepFading) out.master.gain.setTargetAtTime(masterLevel(), now, tc);
 }
-const masterLevel = () => Math.pow(S.master / 100, 1.5) * 0.9;
+const masterLevel = () => Math.pow(S.master / 100, 1.5) * 0.85;
 
 /* ---------- Voices ---------- */
 function voice(wave, freq, t, dest, pan = 0) {
@@ -327,7 +330,11 @@ function playPad(notes, t, dur) {
 function releasePads(t) {
   for (const p of activePads) {
     if (p.end > t) {
-      try { p.v.g.gain.cancelScheduledValues(t); p.v.g.gain.setTargetAtTime(0, t, 0.8); p.v.o.stop(t + 5); } catch (e) {}
+      try {
+        const g = p.v.g.gain;
+        if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(t); else { g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); }
+        g.setTargetAtTime(0, t, 0.8); p.v.o.stop(t + 6);
+      } catch (e) {}
     }
   }
   activePads = activePads.filter(p => p.end > t + 6);
@@ -336,7 +343,7 @@ function releasePads(t) {
 function playBass(midi, t, dur, vel) {
   const f = mtof(midi);
   const v = voice(waves.bass, f, t, out.bass);
-  const peak = 0.34 * vel;
+  const peak = 0.24 * vel;
   v.g.gain.setValueAtTime(0, t);
   v.g.gain.linearRampToValueAtTime(peak, t + 0.035);
   v.g.gain.setTargetAtTime(peak * 0.55, t + 0.035, 0.5);
@@ -346,7 +353,7 @@ function playBass(midi, t, dur, vel) {
 
 function playKey(midi, t, vel, pan) {
   const v = voice(waves.keys, mtof(midi), t, out.keysLP, pan);
-  const peak = 0.07 * vel;
+  const peak = 0.06 * vel;
   v.g.gain.setValueAtTime(0, t);
   v.g.gain.linearRampToValueAtTime(peak, t + 0.012);
   v.g.gain.setTargetAtTime(0, t + 0.012, 0.55);
@@ -368,11 +375,11 @@ function playSpark(midi, t) {
 function playPulse(t, vel) {
   const o = ctx.createOscillator(); o.type = 'sine';
   const g = ctx.createGain(); g.gain.value = 0;
-  o.frequency.setValueAtTime(78, t);
-  o.frequency.exponentialRampToValueAtTime(44, t + 0.18);
+  o.frequency.setValueAtTime(82, t);
+  o.frequency.exponentialRampToValueAtTime(55, t + 0.18);
   o.connect(g); g.connect(out.pulse);
   g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(0.3 * vel, t + 0.012);
+  g.gain.linearRampToValueAtTime(0.16 * vel, t + 0.02);
   g.gain.setTargetAtTime(0, t + 0.02, 0.11);
   o.start(t); o.stop(t + 1);
   o.onended = () => { try { o.disconnect(); g.disconnect(); } catch (e) {} };
@@ -468,8 +475,6 @@ function tick() {
 async function start() {
   if (!ctx) initAudio();
   await ctx.resume();
-  if (audioEl) { try { await audioEl.play(); } catch (e) { out.master.disconnect(); out.master.connect(ctx.destination); audioEl = null; } }
-  else { out.master.connect(ctx.destination); }
   playing = true;
   step = 0; arpIdx = 0; lastPadCenter = 60;
   nextTime = ctx.currentTime + 0.15;
@@ -494,7 +499,7 @@ function stop(fromSleep) {
   out.master.gain.setValueAtTime(out.master.gain.value, now);
   out.master.gain.linearRampToValueAtTime(0, now + (fromSleep ? 0.3 : 1.8));
   releasePads(now);
-  setTimeout(() => { if (!playing) { ctx.suspend(); if (audioEl) audioEl.pause(); } }, 2200);
+  setTimeout(() => { if (!playing) { ctx.suspend(); } }, 2200);
   sleepEnd = 0; sleepFading = false;
   if (fromSleep) sleepMinutes = 0;
   releaseWake();
