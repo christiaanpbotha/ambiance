@@ -89,6 +89,12 @@
   </div>
 
   <section>
+    <h2>Presets</h2>
+    <div class="grid" id="presetGrid"></div>
+    <button class="chip" id="resetBtn" style="margin-top:10px;width:100%">↺ Reset mix</button>
+  </section>
+
+  <section>
     <h2>Progression</h2>
     <div class="grid" id="progGrid"></div>
   </section>
@@ -173,6 +179,17 @@ const PATTERNS = [
   {id:'flow', name:'Flowing'}, {id:'rise', name:'Rising'}, {id:'wander', name:'Wandering'}, {id:'sparse', name:'Sparse'}
 ];
 const SLEEP = [0,15,30,45,60,90];
+
+// Full scenes: progression + key + tempo + mix
+const PRESETS = [
+  {name:'For Her ♡', desc:'Echo in D♭, slow & tender', s:{prog:'echo', key:1, tempo:56, pad:70, bass:55, keys:52, spark:32, pulse:0, pattern:'wander', space:72, warmth:58}},
+  {name:'Cloud Bed', desc:'Soft pads, barely-there keys', s:{prog:'drift', key:4, tempo:52, pad:88, bass:50, keys:22, spark:14, pulse:0, pattern:'sparse', space:82, warmth:70}},
+  {name:'Music Box', desc:'Twinkly lullaby in G', s:{prog:'lullaby', key:7, tempo:64, pad:45, bass:40, keys:72, spark:42, pulse:0, pattern:'flow', space:62, warmth:38}},
+  {name:'Heartbeat', desc:'Deep, warm, gentle pulse', s:{prog:'deep', key:9, tempo:58, pad:68, bass:70, keys:28, spark:10, pulse:45, pattern:'sparse', space:55, warmth:68}},
+  {name:'Late Night', desc:'Lo-fi chords, round bass', s:{prog:'lofi', key:3, tempo:70, pad:60, bass:75, keys:50, spark:16, pulse:28, pattern:'wander', space:45, warmth:76}},
+  {name:'Ocean Breath', desc:'Wide, slow and spacious', s:{prog:'ocean', key:2, tempo:48, pad:80, bass:55, keys:35, spark:24, pulse:0, pattern:'sparse', space:88, warmth:62}},
+];
+const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'];
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:65, keys:45, spark:25, pulse:20,
@@ -662,8 +679,11 @@ function renderSleep() {
   });
 }
 
+const sliders = [];
+function syncSliders() { for (const [el, o, key] of sliders) { el.value = S[key]; o.textContent = S[key]; } }
 function bindSlider(id, key, fmt = v => v) {
   const el = $(id), o = el.parentElement.querySelector('output');
+  sliders.push([el, o, key]);
   el.value = S[key]; o.textContent = fmt(S[key]);
   el.addEventListener('input', () => {
     S[key] = +el.value; o.textContent = fmt(S[key]); save();
@@ -676,7 +696,35 @@ bindSlider('tempo', 'tempo');
 bindSlider('v_pad', 'pad'); bindSlider('v_bass', 'bass'); bindSlider('v_keys', 'keys');
 bindSlider('v_spark', 'spark'); bindSlider('v_pulse', 'pulse');
 bindSlider('master', 'master'); bindSlider('space', 'space'); bindSlider('warmth', 'warmth');
-renderProgs(); renderKeys(); renderPatterns(); renderSleep(); setUI();
+function applyScene(vals) {
+  const restart = (vals.prog && vals.prog !== S.prog) || (vals.key !== undefined && vals.key !== S.key);
+  Object.assign(S, vals); save();
+  syncSliders(); renderProgs(); renderKeys(); renderPatterns(); setUI(); applyMix();
+  if (restart) restartProgression();
+  mediaSession();
+}
+function renderPresets() {
+  $('presetGrid').innerHTML = '';
+  PRESETS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'prog';
+    b.innerHTML = '<b>' + p.name + '</b><span>' + p.desc + '</span>';
+    b.onclick = () => {
+      applyScene(p.s);
+      document.querySelectorAll('#presetGrid .prog').forEach(x => x.classList.remove('on')); b.classList.add('on');
+      if (!playing) start().catch(e => diag('start failed: ' + e.message));
+    };
+    $('presetGrid').appendChild(b);
+  });
+}
+// Reset mix: layers, pattern, space & warmth back to defaults (keeps your progression, key, tempo and volume)
+$('resetBtn').onclick = () => {
+  const vals = {}; for (const k of MIX_KEYS) vals[k] = DEFAULTS[k];
+  applyScene(vals);
+  document.querySelectorAll('#presetGrid .prog').forEach(x => x.classList.remove('on'));
+  const b = $('resetBtn'); b.textContent = '✓ Mix reset'; setTimeout(() => b.textContent = '↺ Reset mix', 1500);
+};
+renderPresets(); renderProgs(); renderKeys(); renderPatterns(); renderSleep(); setUI();
 
 $('playBtn').onclick = () => { if (playing) stop(); else start().catch(e => diag('start failed: ' + e.message)); };
 
