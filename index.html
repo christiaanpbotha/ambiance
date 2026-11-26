@@ -125,6 +125,17 @@
     <div class="toggle"><span>Keep screen awake while playing</span><button class="switch" id="wakeSw" aria-label="Keep awake"></button></div>
   </section>
 
+  <section>
+    <h2>No sound?</h2>
+    <div class="sub">Turn the media volume up while it plays. If it's still silent, try these:</div>
+    <div class="chips" style="margin:8px 0 4px">
+      <button class="chip" id="beepBtn">Test beep</button>
+      <button class="chip" id="mediaBeepBtn">Test media beep</button>
+    </div>
+    <div class="toggle" style="margin-top:12px"><span>Alternative audio output</span><button class="switch" id="altSw" aria-label="Alternative output"></button></div>
+    <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
+  </section>
+
   <footer>Pure tones · no tremolo · loops forever</footer>
 </div>
 <div id="dim">tap to wake</div>
@@ -165,7 +176,7 @@ const SLEEP = [0,15,30,45,60,90];
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:65, keys:45, spark:25, pulse:20,
-  pattern:'flow', master:75, space:60, warmth:55, wake:false};
+  pattern:'flow', master:75, space:60, warmth:55, wake:false, alt:false};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
 const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); } catch(e) {} };
@@ -231,7 +242,7 @@ function initAudio() {
   out.send.connect(out.verb); out.verb.connect(out.verbFilter); out.verbFilter.connect(out.verbReturn); out.verbReturn.connect(out.warmth);
   out.warmth.connect(out.hp); out.hp.connect(out.hp2); out.hp2.connect(out.trim); out.trim.connect(out.comp); out.comp.connect(out.limiter); out.limiter.connect(out.master);
 
-  out.master.connect(ctx.destination);
+  routeOutput();
 
   // Per-layer buses
   for (const k of ['pad', 'bass', 'keys', 'spark', 'pulse']) {
@@ -264,6 +275,33 @@ function initAudio() {
     {type: 'text/javascript'})));
   worker.onmessage = tick;
 }
+
+let altDest = null, altEl = null;
+function routeOutput() {
+  if (!ctx) return;
+  try { out.master.disconnect(); } catch (e) {}
+  if (S.alt) {
+    try {
+      if (!altDest) {
+        altDest = ctx.createMediaStreamDestination();
+        altEl = new Audio(); altEl.setAttribute('playsinline', ''); altEl.srcObject = altDest.stream;
+      }
+      out.master.connect(altDest);
+      if (playing) altEl.play().catch(e => diag('alt play failed: ' + e.message));
+      return;
+    } catch (e) { diag('alt output unsupported: ' + e.message); }
+  }
+  out.master.connect(ctx.destination);
+  if (altEl) altEl.pause();
+}
+
+let diagMsg = '';
+function diag(m) { if (m) diagMsg = m; const el = document.getElementById('diag'); if (!el) return;
+  el.textContent = (ctx ? 'Audio engine: ' + ctx.state + ' · ' + ctx.sampleRate + ' Hz' : 'Audio engine: not started') +
+    (diagMsg ? ' · ' + diagMsg : ''); }
+window.addEventListener('error', e => diag('error: ' + e.message));
+window.addEventListener('unhandledrejection', e => diag('error: ' + (e.reason && e.reason.message || e.reason)));
+setInterval(() => diag(), 1000);
 
 function applyMix(instant) {
   if (!ctx) return;
@@ -510,7 +548,8 @@ async function start() {
     initAudio();
     ctx.onstatechange = () => { if (playing && ctx.state !== 'running') ctx.resume().catch(() => {}); };
   }
-  try { await ctx.resume(); } catch (e) {}
+  try { await ctx.resume(); } catch (e) { diag('resume failed: ' + e.message); }
+  if (S.alt && altEl) altEl.play().catch(e => diag('alt play failed: ' + e.message));
   playing = true;
   step = 0; arpIdx = 0; lastPadCenter = 60;
   nextTime = ctx.currentTime + 0.15;
@@ -535,7 +574,7 @@ function stop(fromSleep) {
   out.master.gain.setValueAtTime(out.master.gain.value, now);
   out.master.gain.linearRampToValueAtTime(0, now + (fromSleep ? 0.3 : 1.8));
   releasePads(now);
-  setTimeout(() => { if (!playing) { ctx.suspend(); if (unlockEl) unlockEl.pause(); } }, 2200);
+  setTimeout(() => { if (!playing) { ctx.suspend(); if (unlockEl) unlockEl.pause(); if (altEl) altEl.pause(); } }, 2200);
   sleepEnd = 0; sleepFading = false;
   if (fromSleep) sleepMinutes = 0;
   releaseWake();
@@ -661,7 +700,38 @@ bindSlider('v_spark', 'spark'); bindSlider('v_pulse', 'pulse');
 bindSlider('master', 'master'); bindSlider('space', 'space'); bindSlider('warmth', 'warmth');
 renderProgs(); renderKeys(); renderPatterns(); renderSleep(); setUI();
 
-$('playBtn').onclick = () => playing ? stop() : start();
+$('playBtn').onclick = () => { if (playing) stop(); else start().catch(e => diag('start failed: ' + e.message)); };
+
+// Plain 440 Hz beep through the Web Audio engine (bypasses all effects)
+$('beepBtn').onclick = async () => {
+  unlockAudio();
+  try {
+    if (!ctx) { initAudio(); }
+    await ctx.resume();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = 440; g.gain.value = 0;
+    const t = ctx.currentTime;
+    g.gain.linearRampToValueAtTime(0.3, t + 0.02); g.gain.setTargetAtTime(0, t + 0.6, 0.08);
+    o.connect(g);
+    if (S.alt && altDest) { g.connect(altDest); altEl.play().catch(()=>{}); } else g.connect(ctx.destination);
+    o.start(t); o.stop(t + 1.2);
+    diag('beep sent (' + (S.alt ? 'alternative' : 'normal') + ' output)');
+  } catch (e) { diag('beep failed: ' + e.message); }
+};
+// Beep through a normal media player (no Web Audio at all)
+$('mediaBeepBtn').onclick = () => {
+  const sr = 22050, n = sr, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+  const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+  w(0,'RIFF'); v.setUint32(4,36+n*2,true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,n*2,true);
+  for (let i = 0; i < n; i++) { const env = Math.min(1, i / 400, (n - i) / 4000); v.setInt16(44 + i * 2, Math.sin(2 * Math.PI * 523.25 * i / sr) * 9000 * env, true); }
+  const a = new Audio(URL.createObjectURL(new Blob([b], {type: 'audio/wav'})));
+  a.play().then(() => diag('media beep playing')).catch(e => diag('media beep failed: ' + e.message));
+};
+$('altSw').classList.toggle('on', S.alt);
+$('altSw').onclick = () => { S.alt = !S.alt; save(); $('altSw').classList.toggle('on', S.alt); routeOutput(); diag(S.alt ? 'alternative output on' : 'normal output'); };
+diag();
 $('wakeSw').classList.toggle('on', S.wake);
 $('wakeSw').onclick = () => {
   S.wake = !S.wake; save(); $('wakeSw').classList.toggle('on', S.wake);
