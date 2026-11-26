@@ -145,6 +145,8 @@ const NOTE_NAMES = ['C','D♭','D','E♭','E','F','F♯','G','A♭','A','B♭','
 
 // [semitones from tonic, chord type, bars]
 const PROGS = [
+  {id:'echo', name:'Echo ♡', roman:'Imaj9 · III7 · vi9 · IV · iv · I', echo:true,
+   chords:[[0,'maj9',2],[4,'dom7',2],[9,'m9',2],[5,'maj7',1],[5,'m6',1],[0,'six9',2]]},
   {id:'lullaby', name:'Lullaby', roman:'I · vi · IV · V', chords:[[0,'add9',2],[9,'m7',2],[5,'maj7',2],[7,'sus2',1],[7,'add9',1]]},
   {id:'drift', name:'Drift', roman:'Imaj9 · IVmaj9', chords:[[0,'maj9',2],[5,'maj9',2]]},
   {id:'moonlit', name:'Moonlit', roman:'i · VI · III · VII', chords:[[0,'m9',2],[8,'maj7',2],[3,'maj7',2],[10,'add9',2]]},
@@ -245,6 +247,14 @@ function initAudio() {
   // gentle per-layer tone shaping
   out.keysLP = ctx.createBiquadFilter(); out.keysLP.type = 'lowpass'; out.keysLP.frequency.value = 2600;
   out.keysLP.connect(out.keys);
+  out.echo = ctx.createDelay(3);
+  out.echoFb = ctx.createGain(); out.echoFb.gain.value = 0.4;
+  out.echoTone = ctx.createBiquadFilter(); out.echoTone.type = 'lowpass'; out.echoTone.frequency.value = 2000;
+  out.echoWet = ctx.createGain(); out.echoWet.gain.value = 0;
+  out.echoIn = ctx.createGain();
+  out.echoIn.connect(out.echo); out.echo.connect(out.echoTone); out.echoTone.connect(out.echoFb); out.echoFb.connect(out.echo);
+  out.echoTone.connect(out.echoWet); out.echoWet.connect(out.keys);
+  out.keysLP.connect(out.echoIn); out.spark.connect(out.echoIn);
   out.padLP = ctx.createBiquadFilter(); out.padLP.type = 'lowpass'; out.padLP.frequency.value = 1400; out.padLP.Q.value = 0.3;
   out.padLP.connect(out.pad);
   applyMix(true);
@@ -268,6 +278,8 @@ function applyMix(instant) {
   out.verbReturn.gain.setTargetAtTime(sp * 0.9, now, tc);
   out.dry.gain.setTargetAtTime(1 - sp * 0.35, now, tc);
   out.warmth.frequency.setTargetAtTime(9000 * Math.pow(0.12, S.warmth / 100) + 500, now, tc);
+  out.echo.delayTime.setTargetAtTime(stepDur() * 3, now, instant ? 0.001 : 0.3);   // dotted-eighth echo
+  out.echoWet.gain.setTargetAtTime(prog().echo ? 0.55 : 0, now, instant ? 0.001 : 0.6);
   if (playing && !sleepFading) out.master.gain.setTargetAtTime(masterLevel(), now, tc);
 }
 const masterLevel = () => Math.pow(S.master / 100, 1.5) * 0.85;
@@ -569,7 +581,7 @@ function renderProgs() {
     const b = document.createElement('button');
     b.className = 'prog' + (p.id === S.prog ? ' on' : '');
     b.innerHTML = '<b>' + p.name + '</b><span>' + p.roman + '</span>';
-    b.onclick = () => { S.prog = p.id; save(); renderProgs(); setUI(); restartProgression(); mediaSession(); };
+    b.onclick = () => { S.prog = p.id; save(); renderProgs(); setUI(); restartProgression(); applyMix(); mediaSession(); };
     $('progGrid').appendChild(b);
   });
 }
