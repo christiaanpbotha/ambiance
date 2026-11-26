@@ -7,7 +7,7 @@ A sleep/background music app: soft pads, warm bass and gentle keys looping over 
 - Layer mixer: Pad, Bass, Keys, Sparkle, Pulse
 - Keys patterns: Flowing, Rising, Wandering, Sparse
 - Space (reverb), Warmth (tone), sleep timer with a 1-minute fade-out
-- 6 scene presets (For Her ♡, Cloud Bed, Music Box, Heartbeat, Late Night, Ocean Breath) and a Reset mix button
+- Reset mix button loads a tuned mix for the current progression
 - Installable PWA that works offline
 
 Install: open the GitHub Pages URL on your phone, then use **Add to Home screen / Install app**.
