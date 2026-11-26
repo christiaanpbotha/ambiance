@@ -111,6 +111,7 @@
     <div class="row"><label>Keys</label><input type="range" id="v_keys" min="0" max="100"><output></output></div>
     <div class="row"><label>Sparkle</label><input type="range" id="v_spark" min="0" max="100"><output></output></div>
     <div class="row"><label>Pulse</label><input type="range" id="v_pulse" min="0" max="100"><output></output></div>
+    <div class="row"><label>Weather</label><input type="range" id="v_weather" min="0" max="100"><output></output></div>
     <div class="sub" style="margin-top:12px">Keys pattern</div>
     <div class="chips" id="patChips"></div>
     <button class="chip" id="resetBtn" style="margin-top:14px;width:100%">↺ Reset mix</button>
@@ -140,7 +141,7 @@
     <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
   </section>
 
-  <footer>Pure tones · no tremolo · loops forever · v21</footer>
+  <footer>Pure tones · no tremolo · loops forever · v22</footer>
 </div>
 <div id="dim">tap to wake</div>
 <audio id="player" playsinline preload="auto"></audio>
@@ -198,7 +199,7 @@ const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:55, keys:45, spark:25, pulse:20,
-  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:true};
+  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:true, weather:60};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
 const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); } catch(e) {} };
@@ -254,8 +255,11 @@ function initAudio() {
   out.verb = buildReverb();
   out.verbReturn = ctx.createGain();
   out.send = ctx.createGain();
+  out.weather = ctx.createGain();                     // rainy-day bus: stream + thunder + drips
 
   out.dry.connect(out.warmth);
+  out.weather.connect(out.dry);
+  out.weatherSend = ctx.createGain(); out.weatherSend.gain.value = 0.35; out.weather.connect(out.weatherSend); out.weatherSend.connect(out.send);
   out.send.connect(out.verb.input); out.verb.output.connect(out.verbReturn); out.verbReturn.connect(out.warmth);
   out.warmth.connect(out.hp); out.hp.connect(out.trim); out.trim.connect(out.limiter); out.limiter.connect(out.master);
 
@@ -313,6 +317,7 @@ function applyMix(instant) {
   out.keys.gain.setTargetAtTime(curve(S.keys) * 1.0, now, tc);
   out.spark.gain.setTargetAtTime(curve(S.spark) * 1.0, now, tc);
   out.pulse.gain.setTargetAtTime(curve(S.pulse) * 1.0, now, tc);
+  out.weather.gain.setTargetAtTime(Math.pow(S.weather / 60, 1.15), now, tc);   // 60 = the level you liked
   const sp = S.space / 100;
   out.verbReturn.gain.setTargetAtTime(sp * 1.6, now, tc);
   out.dry.gain.setTargetAtTime(1 - sp * 0.35, now, tc);
@@ -550,8 +555,7 @@ function waterStart() {
   if (!out.water) {
     out.water = ctx.createGain(); out.water.gain.value = 1;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
-    out.water.connect(lp); lp.connect(out.dry);
-    const snd = ctx.createGain(); snd.gain.value = 0.35; lp.connect(snd); snd.connect(out.send);
+    out.water.connect(lp); lp.connect(out.weather);
   }
   if (!waterBuf) {                                   // 3 s of soft (brownish) noise, crossfaded so the loop is seamless
     const len = Math.floor(ctx.sampleRate * 3), b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
@@ -568,7 +572,7 @@ function waterStart() {
   waterSrc.connect(waterBP); waterBP.connect(waterGain); waterGain.connect(out.water);
   waterSrc.start();
   waterGain.gain.setTargetAtTime(0.09, ctx.currentTime, 1.2);
-  nextDrop = ctx.currentTime + 0.3; nextWaterMove = ctx.currentTime;
+  nextDrop = ctx.currentTime + 4 + Math.random() * 5; nextWaterMove = ctx.currentTime;
 }
 function waterStop(fast) {
   if (!waterSrc) return;
@@ -578,8 +582,29 @@ function waterStop(fast) {
   src.stop(now + (fast ? 0.6 : 3));
   waterSrc = null;
 }
+// A single distant drip: very short, high, quick upward "plip" with a little room on it
+function playDrip(t) {
+  const o = ctx.createOscillator(), g = ctx.createGain(), s = ctx.createGain();
+  const f0 = 1300 + Math.random() * 1100, len = 0.008 + Math.random() * 0.008;
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(f0 * (1.35 + Math.random() * 0.25), t + len);
+  const peak = 0.006 + Math.random() * 0.006;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(peak, t + 0.0015);
+  g.gain.setTargetAtTime(0, t + 0.0015, 0.012);
+  s.gain.value = 2.2;                                  // mostly heard in the space, so it sounds far away
+  o.connect(g); g.connect(out.weather); g.connect(s); s.connect(out.send);
+  o.start(t); o.stop(t + 0.2);
+  o.onended = () => { try { o.disconnect(); g.disconnect(); s.disconnect(); } catch (e) {} };
+}
+
 function scheduleWater(until) {
   if (!waterSrc) return;
+  while (nextDrop < until) {
+    playDrip(nextDrop);
+    if (Math.random() < 0.25) playDrip(nextDrop + 0.18 + Math.random() * 0.5);   // now and then a second drop
+    nextDrop += 3 + Math.random() * 9;
+  }
   if (nextWaterMove < until) {                       // the stream slowly shifts character (no audio-rate modulation)
     waterBP.frequency.setTargetAtTime(650 + Math.random() * 900, nextWaterMove, 0.8);
     nextWaterMove += 1 + Math.random() * 1.5;
@@ -601,9 +626,10 @@ function playThunder(t) {
   const src = ctx.createBufferSource(); src.buffer = thunderBuffer();
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0;
   const g = ctx.createGain(); g.gain.value = 0;
-  src.connect(lp); lp.connect(g); g.connect(out.dry); g.connect(out.send);
+  const ts = ctx.createGain(); ts.gain.value = 0.6;
+  src.connect(lp); lp.connect(g); g.connect(out.weather); g.connect(ts); ts.connect(out.send);
   const big = Math.random() < 0.35, len = big ? 7 + Math.random() * 2.5 : 4.5 + Math.random() * 2.5;
-  const peak = (big ? 0.3 : 0.19) * (0.8 + Math.random() * 0.4);
+  const peak = (big ? 0.27 : 0.17) * (0.8 + Math.random() * 0.4);
   // distant: slow onset, a few rolling swells, long fade; brightness falls away as it rolls
   lp.frequency.setValueAtTime(big ? 700 : 500, t);
   lp.frequency.setTargetAtTime(160, t + 0.4, len / 4);
@@ -622,7 +648,7 @@ function playThunder(t) {
   g.gain.setTargetAtTime(0, at, (end - at) / 3);
   src.start(t, Math.random() * 2); src.stop(end + 2);
   const rec = {g}; thunderVoices.add(rec);
-  src.onended = () => { thunderVoices.delete(rec); try { src.disconnect(); lp.disconnect(); g.disconnect(); } catch (e) {} };
+  src.onended = () => { thunderVoices.delete(rec); try { src.disconnect(); lp.disconnect(); g.disconnect(); ts.disconnect(); } catch (e) {} };
 }
 function scheduleThunder(until) {
   if (!S.water) return;
@@ -846,7 +872,7 @@ function bindSlider(id, key, fmt = v => v) {
 
 bindSlider('tempo', 'tempo');
 bindSlider('v_pad', 'pad'); bindSlider('v_bass', 'bass'); bindSlider('v_keys', 'keys');
-bindSlider('v_spark', 'spark'); bindSlider('v_pulse', 'pulse');
+bindSlider('v_spark', 'spark'); bindSlider('v_pulse', 'pulse'); bindSlider('v_weather', 'weather');
 bindSlider('master', 'master'); bindSlider('space', 'space'); bindSlider('warmth', 'warmth');
 function applyScene(vals) {
   const restart = (vals.prog && vals.prog !== S.prog) || (vals.key !== undefined && vals.key !== S.key);
