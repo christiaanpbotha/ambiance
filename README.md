@@ -9,6 +9,7 @@ A sleep/background music app: soft pads, warm bass and gentle keys looping over 
 - Space (reverb), Warmth (tone), sleep timer with a 1-minute fade-out
 - Each progression loads its own tuned mix; Reset mix brings it back
 - Rainy day toggle: soft stream noise with distant thunder
+- Play all songs: each song loops 10 times, then moves to the next
 - Installable PWA that works offline
 
 Install: open the GitHub Pages URL on your phone, then use **Add to Home screen / Install app**.

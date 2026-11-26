@@ -95,6 +95,7 @@
   <section>
     <h2>Song</h2>
     <div class="grid" id="progGrid"></div>
+    <div class="toggle" style="margin-top:12px"><span>Play all songs <span style="color:var(--muted);font-size:12px">(10 loops each)</span></span><button class="switch" id="seqSw" aria-label="Play all songs"></button></div>
   </section>
 
   <section>
@@ -141,7 +142,7 @@
     <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
   </section>
 
-  <footer>Pure tones · no tremolo · loops forever · v24</footer>
+  <footer>Pure tones · no tremolo · loops forever · v25</footer>
 </div>
 <div id="dim">tap to wake</div>
 <audio id="player" playsinline preload="auto"></audio>
@@ -199,7 +200,7 @@ const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:55, keys:45, spark:25, pulse:20,
-  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:true, weather:60};
+  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:true, weather:60, seq:false};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
 const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); } catch(e) {} };
@@ -207,6 +208,7 @@ if (!S.waterOnce) { S.water = true; S.waterOnce = true; save(); }   // switch wa
 
 /* ---------- Audio engine ---------- */
 let ctx = null, out = {}, waves = {}, playing = false;
+const SEQ_LOOPS = 10; let loopsDone = 0;
 let step = 0, nextTime = 0, worker = null, activePads = [], lastPadCenter = 60;
 const live = new Set();
 let sleepEnd = 0, sleepFading = false, wakeLock = null;
@@ -664,6 +666,21 @@ function tick() {
   if (!playing) return;
   const ahead = 1.2;
   while (nextTime < ctx.currentTime + ahead) {
+    if (step > 0 && step % totalSteps() === 0) {          // a full loop of the song just finished
+      loopsDone++;
+      if (S.seq && loopsDone >= SEQ_LOOPS) {              // move on to the next song, right on the beat
+        const idx = PROGS.findIndex(p => p.id === S.prog), next = PROGS[(idx + 1) % PROGS.length];
+        Object.assign(S, {prog: next.id}, mixFor(next.id)); save();
+        step = 0; arpIdx = 0; loopsDone = 0;
+        const at = nextTime;
+        out.echoWet.gain.setTargetAtTime(next.echo ? 0.4 : 0, at, 0.6);
+        setTimeout(() => { syncSliders(); renderProgs(); renderPatterns(); applyMix(); setUI(); mediaSession(); },
+                   Math.max(0, (at - ctx.currentTime) * 1000));
+      } else {
+        const at = nextTime;
+        setTimeout(setUI, Math.max(0, (at - ctx.currentTime) * 1000));
+      }
+    }
     scheduleStep(step, nextTime);
     nextTime += stepDur();
     step++;
@@ -710,7 +727,7 @@ async function start() {
   try { await ctx.resume(); } catch (e) { diag('resume failed: ' + e.message); }
   setTimeout(() => { if (playing && ctx.state !== 'running') diag('audio is ' + ctx.state + ' – tap play again'); }, 700);
   playing = true;
-  step = 0; arpIdx = 0; lastPadCenter = 60;
+  step = 0; arpIdx = 0; lastPadCenter = 60; loopsDone = 0;
   nextTime = ctx.currentTime + 0.15;
   sleepFading = false;
   out.master.gain.cancelScheduledValues(ctx.currentTime);
@@ -758,7 +775,7 @@ function restartProgression() {
   out.echoWet.gain.cancelScheduledValues(now); out.echoWet.gain.setValueAtTime(0, now);
   out.echoFb.gain.setValueAtTime(0.32, now + gap);
   out.echoWet.gain.setValueAtTime(prog().echo ? 0.4 : 0, now + gap);
-  step = 0; arpIdx = 0; lastPadCenter = 60;
+  step = 0; arpIdx = 0; lastPadCenter = 60; loopsDone = 0;
   nextTime = now + gap;
   if (!sleepFading) m.setTargetAtTime(masterLevel(), now + gap, 0.2);
 }
@@ -797,7 +814,8 @@ function setUI() {
   $('stage').classList.toggle('playing', playing);
   $('playIcon').innerHTML = playing ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>' : '<path d="M8 5.5v13l11-6.5z"/>';
   $('playBtn').setAttribute('aria-label', playing ? 'Pause' : 'Play');
-  $('progName').textContent = prog().name + ' · ' + NOTE_NAMES[S.key] + ' · ' + S.tempo + ' bpm';
+  $('progName').textContent = prog().name + ' · ' + NOTE_NAMES[S.key] + ' · ' + S.tempo + ' bpm' +
+    (S.seq && playing ? ' · ' + (loopsDone + 1) + '/' + SEQ_LOOPS : '');
   document.documentElement.style.setProperty('--breath', (60 / S.tempo * 8).toFixed(2) + 's');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
   updateTimerLine();
@@ -923,6 +941,8 @@ $('waterSw').onclick = () => {
   S.water = !S.water; save(); $('waterSw').classList.toggle('on', S.water);
   if (playing) { if (S.water) { waterStart(); thunderOn(); } else { waterStop(); thunderOff(); } }
 };
+$('seqSw').classList.toggle('on', S.seq);
+$('seqSw').onclick = () => { S.seq = !S.seq; save(); $('seqSw').classList.toggle('on', S.seq); loopsDone = 0; setUI(); };
 $('wakeSw').classList.toggle('on', S.wake);
 $('wakeSw').onclick = () => {
   S.wake = !S.wake; save(); $('wakeSw').classList.toggle('on', S.wake);
