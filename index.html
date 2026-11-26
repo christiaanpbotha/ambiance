@@ -23,6 +23,7 @@
   .wrap{max-width:520px;margin:0 auto}
   header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
   h1{font-size:20px;font-weight:600;letter-spacing:.06em;margin:0}
+  .iconbtn.on{background:var(--accent);color:#0b0e1a;border-color:var(--accent);font-weight:600}
   .iconbtn{background:none;border:1px solid var(--line);color:var(--muted);border-radius:999px;
     padding:6px 12px;font-size:13px}
   /* Orb */
@@ -76,7 +77,10 @@
 <div class="wrap">
   <header>
     <h1>AMBIENCE</h1>
-    <button class="iconbtn" id="dimBtn">Dim screen</button>
+    <div style="display:flex;gap:8px">
+      <button class="iconbtn" id="waterSw" aria-label="Water">💧 Water</button>
+      <button class="iconbtn" id="dimBtn">Dim screen</button>
+    </div>
   </header>
 
   <div class="stage" id="stage">
@@ -89,7 +93,7 @@
   </div>
 
   <section>
-    <h2>Progression</h2>
+    <h2>Song</h2>
     <div class="grid" id="progGrid"></div>
   </section>
 
@@ -194,7 +198,7 @@ const MIX_KEYS = ['pad','bass','keys','spark','pulse','pattern','space','warmth'
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:55, keys:45, spark:25, pulse:20,
-  pattern:'flow', master:75, space:60, warmth:55, wake:false};
+  pattern:'flow', master:75, space:60, warmth:55, wake:false, water:false};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
 const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); } catch(e) {} };
@@ -538,6 +542,67 @@ function scheduleStep(s, t) {
   }
 }
 
+/* ---------- Water: soft stream bed + gentle droplets (cheap: one looping buffer + tiny blips) ---------- */
+let waterSrc = null, waterGain = null, waterBP = null, nextDrop = 0, nextWaterMove = 0, waterBuf = null;
+function waterStart() {
+  if (!ctx || waterSrc) return;
+  if (!out.water) {
+    out.water = ctx.createGain(); out.water.gain.value = 1;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200;
+    out.water.connect(lp); lp.connect(out.dry);
+    const snd = ctx.createGain(); snd.gain.value = 0.35; lp.connect(snd); snd.connect(out.send);
+  }
+  if (!waterBuf) {                                   // 3 s of soft (brownish) noise, crossfaded so the loop is seamless
+    const len = Math.floor(ctx.sampleRate * 3), b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; }
+    const xf = Math.floor(ctx.sampleRate * 0.3);
+    for (let i = 0; i < xf; i++) { const a = i / xf; d[i] = d[i] * a + d[len - xf + i] * (1 - a); }
+    waterBuf = b;
+  }
+  waterSrc = ctx.createBufferSource(); waterSrc.buffer = waterBuf; waterSrc.loop = true;
+  waterSrc.loopEnd = waterBuf.duration - 0.3;
+  waterBP = ctx.createBiquadFilter(); waterBP.type = 'bandpass'; waterBP.frequency.value = 900; waterBP.Q.value = 0.7;
+  waterGain = ctx.createGain(); waterGain.gain.value = 0;
+  waterSrc.connect(waterBP); waterBP.connect(waterGain); waterGain.connect(out.water);
+  waterSrc.start();
+  waterGain.gain.setTargetAtTime(0.09, ctx.currentTime, 1.2);
+  nextDrop = ctx.currentTime + 0.3; nextWaterMove = ctx.currentTime;
+}
+function waterStop(fast) {
+  if (!waterSrc) return;
+  const src = waterSrc, g = waterGain, now = ctx.currentTime;
+  g.gain.cancelScheduledValues(now); g.gain.setValueAtTime(g.gain.value, now);
+  g.gain.setTargetAtTime(0, now, fast ? 0.1 : 0.6);
+  src.stop(now + (fast ? 0.6 : 3));
+  waterSrc = null;
+}
+function playDrop(t) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  const f0 = 450 + Math.random() * 900, rise = 1.5 + Math.random() * 0.9, len = 0.025 + Math.random() * 0.05;
+  o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(f0 * rise, t + len);
+  const peak = 0.008 + Math.random() * 0.018;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(peak, t + 0.004);
+  g.gain.setTargetAtTime(0, t + 0.004, len * 0.6);
+  o.connect(g); g.connect(out.water);
+  o.start(t); o.stop(t + len + 0.25);
+  o.onended = () => { try { o.disconnect(); g.disconnect(); } catch (e) {} };
+}
+function scheduleWater(until) {
+  if (!waterSrc) return;
+  while (nextDrop < until) {
+    playDrop(nextDrop);
+    // trickle: little clusters of drops with calm gaps in between
+    nextDrop += Math.random() < 0.75 ? 0.05 + Math.random() * 0.18 : 0.4 + Math.random() * 1.1;
+  }
+  if (nextWaterMove < until) {                       // the stream slowly shifts character (no audio-rate modulation)
+    waterBP.frequency.setTargetAtTime(650 + Math.random() * 900, nextWaterMove, 0.8);
+    nextWaterMove += 1 + Math.random() * 1.5;
+  }
+}
+
 function tick() {
   if (!playing) return;
   const ahead = 1.2;
@@ -546,6 +611,7 @@ function tick() {
     nextTime += stepDur();
     step++;
   }
+  scheduleWater(ctx.currentTime + ahead);
   // sleep timer
   if (sleepEnd) {
     const left = sleepEnd - Date.now();
@@ -592,6 +658,7 @@ async function start() {
   out.master.gain.cancelScheduledValues(ctx.currentTime);
   out.master.gain.setValueAtTime(0, ctx.currentTime);
   out.master.gain.linearRampToValueAtTime(masterLevel(), ctx.currentTime + 2.5);
+  if (S.water) waterStart();
   worker.postMessage('start');
   tick();
   if (sleepMinutes) sleepEnd = Date.now() + sleepMinutes * 60000;
@@ -609,6 +676,7 @@ function stop(fromSleep) {
   out.master.gain.setValueAtTime(out.master.gain.value, now);
   out.master.gain.linearRampToValueAtTime(0, now + (fromSleep ? 0.3 : 1.8));
   releasePads(now);
+  waterStop(fromSleep);
   setTimeout(() => { if (!playing) { ctx.suspend(); } }, 2200);
   sleepEnd = 0; sleepFading = false;
   if (fromSleep) sleepMinutes = 0;
@@ -791,6 +859,11 @@ $('mediaBeepBtn').onclick = () => {
   a.play().then(() => diag('media beep playing')).catch(e => diag('media beep failed: ' + e.message));
 };
 diag();
+$('waterSw').classList.toggle('on', S.water);
+$('waterSw').onclick = () => {
+  S.water = !S.water; save(); $('waterSw').classList.toggle('on', S.water);
+  if (playing) S.water ? waterStart() : waterStop();
+};
 $('wakeSw').classList.toggle('on', S.wake);
 $('wakeSw').onclick = () => {
   S.wake = !S.wake; save(); $('wakeSw').classList.toggle('on', S.wake);
