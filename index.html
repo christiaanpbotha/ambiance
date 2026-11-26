@@ -184,6 +184,7 @@ const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); 
 /* ---------- Audio engine ---------- */
 let ctx = null, out = {}, waves = {}, playing = false;
 let step = 0, nextTime = 0, worker = null, activePads = [], lastPadCenter = 60;
+const live = new Set();
 let sleepEnd = 0, sleepFading = false, wakeLock = null;
 
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
@@ -308,7 +309,8 @@ function voice(wave, freq, t, dest, pan = 0) {
   if (false && pan) { const p = ctx.createStereoPanner(); p.pan.value = pan; g.connect(p); node = p; }
   o.connect(g); node.connect(dest);
   o.start(t);
-  o.onended = () => { try { o.disconnect(); g.disconnect(); if (node !== g) node.disconnect(); } catch (e) {} };
+  const rec = {o, g}; live.add(rec);
+  o.onended = () => { live.delete(rec); try { o.disconnect(); g.disconnect(); if (node !== g) node.disconnect(); } catch (e) {} };
   return {o, g};
 }
 
@@ -334,7 +336,7 @@ function voicing(chord) {
 
 function playPad(notes, t, dur) {
   const per = 0.085 / Math.sqrt(notes.length);
-  const atk = Math.min(2.8, dur * 0.4), rel = 2.6;
+  const atk = Math.min(2.4, dur * 0.35), rel = 1.6;
   notes.forEach((n, i) => {
     const pan = notes.length > 1 ? (i / (notes.length - 1) - 0.5) * 0.7 : 0;
     const v = voice(waves.warm, mtof(n), t, out.padLP, pan);
@@ -550,10 +552,20 @@ function stop(fromSleep) {
 
 function restartProgression() {
   if (!playing) return;
-  const t = ctx.currentTime + 0.1;
-  releasePads(t);
-  step = 0; arpIdx = 0;
-  nextTime = t + 0.4;
+  const now = ctx.currentTime, gap = 0.45;
+  const m = out.master.gain;
+  if (m.cancelAndHoldAtTime) m.cancelAndHoldAtTime(now); else { m.cancelScheduledValues(now); m.setValueAtTime(m.value, now); }
+  m.setTargetAtTime(0, now, 0.06);                         // quick, click-free duck
+  for (const r of live) { try { r.o.stop(now + gap - 0.05); } catch (e) {} }   // ringing + already-queued notes
+  activePads = [];
+  // flush the echo so old notes don't repeat over the new key
+  out.echoFb.gain.cancelScheduledValues(now); out.echoFb.gain.setValueAtTime(0, now);
+  out.echoWet.gain.cancelScheduledValues(now); out.echoWet.gain.setValueAtTime(0, now);
+  out.echoFb.gain.setValueAtTime(0.4, now + gap);
+  out.echoWet.gain.setValueAtTime(prog().echo ? 0.55 : 0, now + gap);
+  step = 0; arpIdx = 0; lastPadCenter = 60;
+  nextTime = now + gap;
+  if (!sleepFading) m.setTargetAtTime(masterLevel(), now + gap, 0.2);
 }
 
 /* ---------- Wake lock & media session ---------- */
@@ -610,7 +622,7 @@ function renderProgs() {
     const b = document.createElement('button');
     b.className = 'prog' + (p.id === S.prog ? ' on' : '');
     b.innerHTML = '<b>' + p.name + '</b><span>' + p.roman + '</span>';
-    b.onclick = () => { S.prog = p.id; save(); renderProgs(); setUI(); restartProgression(); applyMix(); mediaSession(); };
+    b.onclick = () => { S.prog = p.id; save(); renderProgs(); setUI(); applyMix(); restartProgression(); mediaSession(); };
     $('progGrid').appendChild(b);
   });
 }
