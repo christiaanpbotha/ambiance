@@ -25,7 +25,7 @@
   h1{font-size:20px;font-weight:600;letter-spacing:.06em;margin:0}
   .iconbtn.on{background:var(--accent);color:#0b0e1a;border-color:var(--accent);font-weight:600}
   .iconbtn{background:none;border:1px solid var(--line);color:var(--muted);border-radius:999px;
-    padding:6px 12px;font-size:13px}
+    padding:6px 10px;font-size:13px;white-space:nowrap}
   /* Orb */
   .stage{display:flex;flex-direction:column;align-items:center;padding:18px 0 8px}
   .orb{width:190px;height:190px;border-radius:50%;position:relative;display:flex;align-items:center;justify-content:center;
@@ -78,8 +78,8 @@
   <header>
     <h1>AMBIENCE</h1>
     <div style="display:flex;gap:8px">
-      <button class="iconbtn" id="waterSw" aria-label="Water">💧 Water</button>
-      <button class="iconbtn" id="dimBtn">Dim screen</button>
+      <button class="iconbtn" id="waterSw" aria-label="Rainy day">🌧 Rainy day</button>
+      <button class="iconbtn" id="dimBtn">🌙 Dim</button>
     </div>
   </header>
 
@@ -140,7 +140,7 @@
     <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
   </section>
 
-  <footer>Pure tones · no tremolo · loops forever</footer>
+  <footer>Pure tones · no tremolo · loops forever · v21</footer>
 </div>
 <div id="dim">tap to wake</div>
 <audio id="player" playsinline preload="auto"></audio>
@@ -586,6 +586,54 @@ function scheduleWater(until) {
   }
 }
 
+/* ---------- Thunder: soft, distant rolls every 25–70 s (no sharp cracks) ---------- */
+let thunderBuf = null, nextThunder = 0; const thunderVoices = new Set();
+function thunderBuffer() {
+  if (thunderBuf) return thunderBuf;
+  const len = Math.floor(ctx.sampleRate * 10), b = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = b.getChannelData(ch); let last = 0;
+    for (let i = 0; i < len; i++) { last = (last + 0.03 * (Math.random() * 2 - 1)) / 1.03; d[i] = last * 4; }
+  }
+  return (thunderBuf = b);
+}
+function playThunder(t) {
+  const src = ctx.createBufferSource(); src.buffer = thunderBuffer();
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0;
+  const g = ctx.createGain(); g.gain.value = 0;
+  src.connect(lp); lp.connect(g); g.connect(out.dry); g.connect(out.send);
+  const big = Math.random() < 0.35, len = big ? 7 + Math.random() * 2.5 : 4.5 + Math.random() * 2.5;
+  const peak = (big ? 0.3 : 0.19) * (0.8 + Math.random() * 0.4);
+  // distant: slow onset, a few rolling swells, long fade; brightness falls away as it rolls
+  lp.frequency.setValueAtTime(big ? 700 : 500, t);
+  lp.frequency.setTargetAtTime(160, t + 0.4, len / 4);
+  g.gain.setValueAtTime(0, t);
+  g.gain.setTargetAtTime(peak, t, big ? 0.25 : 0.45);
+  let at = t + (big ? 0.7 : 1.1), lvl = peak;
+  const rolls = 2 + Math.floor(Math.random() * 3);
+  for (let r = 0; r < rolls; r++) {
+    lvl *= 0.55 + Math.random() * 0.2;
+    g.gain.setTargetAtTime(lvl * 0.45, at, 0.35);                 // dip
+    at += 0.5 + Math.random() * 0.9;
+    g.gain.setTargetAtTime(lvl, at, 0.3);                          // next roll
+    at += 0.4 + Math.random() * 0.6;
+  }
+  const end = Math.max(t + len, at + 2.5);
+  g.gain.setTargetAtTime(0, at, (end - at) / 3);
+  src.start(t, Math.random() * 2); src.stop(end + 2);
+  const rec = {g}; thunderVoices.add(rec);
+  src.onended = () => { thunderVoices.delete(rec); try { src.disconnect(); lp.disconnect(); g.disconnect(); } catch (e) {} };
+}
+function scheduleThunder(until) {
+  if (!S.water) return;
+  while (nextThunder < until) { playThunder(nextThunder); nextThunder += 25 + Math.random() * 45; }
+}
+function thunderOn() { nextThunder = ctx.currentTime + 4 + Math.random() * 6; }
+function thunderOff() {
+  const now = ctx.currentTime;
+  for (const r of thunderVoices) { r.g.gain.cancelScheduledValues(now); r.g.gain.setValueAtTime(r.g.gain.value, now); r.g.gain.setTargetAtTime(0, now, 0.5); }
+}
+
 function tick() {
   if (!playing) return;
   const ahead = 1.2;
@@ -595,6 +643,7 @@ function tick() {
     step++;
   }
   scheduleWater(ctx.currentTime + ahead);
+  scheduleThunder(ctx.currentTime + ahead);
   // sleep timer
   if (sleepEnd) {
     const left = sleepEnd - Date.now();
@@ -641,7 +690,7 @@ async function start() {
   out.master.gain.cancelScheduledValues(ctx.currentTime);
   out.master.gain.setValueAtTime(0, ctx.currentTime);
   out.master.gain.linearRampToValueAtTime(masterLevel(), ctx.currentTime + 2.5);
-  if (S.water) waterStart();
+  if (S.water) { waterStart(); thunderOn(); }
   worker.postMessage('start');
   tick();
   if (sleepMinutes) sleepEnd = Date.now() + sleepMinutes * 60000;
@@ -660,6 +709,7 @@ function stop(fromSleep) {
   out.master.gain.linearRampToValueAtTime(0, now + (fromSleep ? 0.3 : 1.8));
   releasePads(now);
   waterStop(fromSleep);
+  thunderOff();
   setTimeout(() => { if (!playing) { ctx.suspend(); } }, 2200);
   sleepEnd = 0; sleepFading = false;
   if (fromSleep) sleepMinutes = 0;
@@ -845,7 +895,7 @@ diag();
 $('waterSw').classList.toggle('on', S.water);
 $('waterSw').onclick = () => {
   S.water = !S.water; save(); $('waterSw').classList.toggle('on', S.water);
-  if (playing) S.water ? waterStart() : waterStop();
+  if (playing) { if (S.water) { waterStart(); thunderOn(); } else { waterStop(); thunderOff(); } }
 };
 $('wakeSw').classList.toggle('on', S.wake);
 $('wakeSw').onclick = () => {
