@@ -237,7 +237,7 @@ function initAudio() {
   ctx = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'playback'});
   waves.warm = buildWave([1, 0.28, 0.07, 0.02]);            // pad: mostly fundamental
   waves.keys = buildWave([1, 0.42, 0.14, 0.06, 0.025, 0.01]); // soft electric-piano-ish
-  waves.bass = buildWave([1, 0.5, 0.12, 0.03]);                  // sub + a touch of 2nd so phones hear it
+  waves.bass = buildWave([1, 0.62, 0.2, 0.06]);   // more upper harmonics = audible on phone speakers                  // sub + a touch of 2nd so phones hear it
 
   out.master = ctx.createGain(); out.master.gain.value = 0;
   out.hp = ctx.createBiquadFilter(); out.hp.type = 'highpass'; out.hp.frequency.value = 42; out.hp.Q.value = 0.7;
@@ -265,7 +265,7 @@ function initAudio() {
     out[k] = g; out[k + 'Send'] = s;
   }
   // Bass and pulse stay mostly dry so the low end is clean
-  out.bassSend.gain.value = 0.12; out.pulseSend.gain.value = 0.05;
+  out.bassSend.gain.value = 0.04; out.pulseSend.gain.value = 0.05;
   out.padSend.gain.value = 0.9; out.keysSend.gain.value = 1; out.sparkSend.gain.value = 1.2;
   // gentle per-layer tone shaping
   out.keysLP = ctx.createBiquadFilter(); out.keysLP.type = 'lowpass'; out.keysLP.frequency.value = 2600;
@@ -356,14 +356,31 @@ function voicing(chord) {
   return best;
 }
 
+// Pad envelope: same swell up, a short peak (under 2 s), then a smooth fall to a soft bed
+// that stays quiet until the chord changes, so the chord doesn't sit loud and overstay.
+function padCurve(peak, atk, dur) {
+  const n = 256, c = new Float32Array(n);
+  const hold = 0.7, bed = 0.28;                                  // peak plateau (s), bed level
+  const fallStart = atk + hold, fall = Math.max(0.5, Math.min(4, (dur - fallStart) * 0.75));
+  for (let j = 0; j < n; j++) {
+    const time = (j / (n - 1)) * (dur - 0.01);
+    let v;
+    if (time < atk) v = time / atk;                              // rise (unchanged)
+    else if (time < fallStart) v = 1;                            // brief peak
+    else if (time < fallStart + fall) v = bed + (1 - bed) * 0.5 * (1 + Math.cos(Math.PI * (time - fallStart) / fall));
+    else v = bed;
+    c[j] = peak * v;
+  }
+  return c;
+}
+
 function playPad(notes, t, dur) {
   const per = 0.085 / Math.sqrt(notes.length);
   const atk = Math.min(2.4, dur * 0.35), rel = 1.6;
   notes.forEach((n, i) => {
     const pan = notes.length > 1 ? (i / (notes.length - 1) - 0.5) * 0.7 : 0;
     const v = voice(waves.warm, mtof(n), t, out.padLP, pan);
-    v.g.gain.setValueAtTime(0, t);
-    v.g.gain.linearRampToValueAtTime(per, t + atk);
+    v.g.gain.setValueCurveAtTime(padCurve(per, atk, dur), t, dur - 0.01);
     v.g.gain.setTargetAtTime(0, t + dur, rel / 3);
     v.o.stop(t + dur + rel * 1.8);
     activePads.push({v, end: t + dur});
@@ -387,7 +404,7 @@ function playBass(midi, t, dur, vel) {
   const f = mtof(midi);
   const v = voice(waves.bass, f, t, out.bass);
   // breath-shaped: slow swell to a peak about a third of the way in, then an immediate, steady fade
-  const peak = 0.14 * vel, atk = Math.max(0.15, Math.min(2.2, dur * 0.35));
+  const peak = 0.21 * vel, atk = Math.max(0.15, Math.min(2.2, dur * 0.35));
   v.g.gain.setValueAtTime(0, t);
   v.g.gain.setTargetAtTime(peak, t, atk / 2.2);              // gentle curve, no hard edge
   v.g.gain.setTargetAtTime(0, t + atk, (dur - atk) / 2.8);   // mostly faded by the end of the note
