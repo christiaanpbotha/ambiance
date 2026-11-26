@@ -386,12 +386,12 @@ function releasePads(t) {
 function playBass(midi, t, dur, vel) {
   const f = mtof(midi);
   const v = voice(waves.bass, f, t, out.bass);
-  const peak = 0.14 * vel, atk = 0.09;
+  // breath-shaped: slow swell to a peak about a third of the way in, then an immediate, steady fade
+  const peak = 0.14 * vel, atk = Math.max(0.15, Math.min(2.2, dur * 0.35));
   v.g.gain.setValueAtTime(0, t);
-  v.g.gain.linearRampToValueAtTime(peak, t + atk);
-  v.g.gain.setTargetAtTime(peak * 0.6, t + atk, 0.6);
-  v.g.gain.setTargetAtTime(0, t + dur, 0.25);
-  v.o.stop(t + dur + 1.0);
+  v.g.gain.setTargetAtTime(peak, t, atk / 2.2);              // gentle curve, no hard edge
+  v.g.gain.setTargetAtTime(0, t + atk, (dur - atk) / 2.8);   // mostly faded by the end of the note
+  v.o.stop(t + dur + 1.5);
 }
 
 function playKey(midi, t, vel, pan) {
