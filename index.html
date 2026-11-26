@@ -132,13 +132,13 @@
       <button class="chip" id="beepBtn">Test beep</button>
       <button class="chip" id="mediaBeepBtn">Test media beep</button>
     </div>
-    <div class="toggle" style="margin-top:12px"><span>Alternative audio output</span><button class="switch" id="altSw" aria-label="Alternative output"></button></div>
     <div class="sub" id="diag" style="margin-top:10px;word-break:break-word"></div>
   </section>
 
   <footer>Pure tones · no tremolo · loops forever</footer>
 </div>
 <div id="dim">tap to wake</div>
+<audio id="player" playsinline preload="auto"></audio>
 
 <script>
 (() => {
@@ -176,7 +176,7 @@ const SLEEP = [0,15,30,45,60,90];
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {prog:'lullaby', key:0, tempo:62, pad:70, bass:65, keys:45, spark:25, pulse:20,
-  pattern:'flow', master:75, space:60, warmth:55, wake:false, alt:false};
+  pattern:'flow', master:75, space:60, warmth:55, wake:false};
 let S = {...DEFAULTS};
 try { Object.assign(S, JSON.parse(localStorage.getItem('ambiance') || '{}')); } catch(e) {}
 const save = () => { try { localStorage.setItem('ambiance', JSON.stringify(S)); } catch(e) {} };
@@ -276,24 +276,7 @@ function initAudio() {
   worker.onmessage = tick;
 }
 
-let altDest = null, altEl = null;
-function routeOutput() {
-  if (!ctx) return;
-  try { out.master.disconnect(); } catch (e) {}
-  if (S.alt) {
-    try {
-      if (!altDest) {
-        altDest = ctx.createMediaStreamDestination();
-        altEl = new Audio(); altEl.setAttribute('playsinline', ''); altEl.srcObject = altDest.stream;
-      }
-      out.master.connect(altDest);
-      if (playing) altEl.play().catch(e => diag('alt play failed: ' + e.message));
-      return;
-    } catch (e) { diag('alt output unsupported: ' + e.message); }
-  }
-  out.master.connect(ctx.destination);
-  if (altEl) altEl.pause();
-}
+function routeOutput() { out.master.connect(ctx.destination); }
 
 let diagMsg = '';
 function diag(m) { if (m) diagMsg = m; const el = document.getElementById('diag'); if (!el) return;
@@ -524,21 +507,18 @@ function tick() {
 
 // A silent looping <audio> element, started inside the tap, switches iOS into "playback" audio mode
 // (so the silent switch doesn't mute us) and helps keep audio alive. It carries no actual sound.
-let unlockEl = null;
-function silentWavURL() {
-  const n = 8000, b = new ArrayBuffer(44 + n), v = new DataView(b);
-  const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
-  w(0, 'RIFF'); v.setUint32(4, 36 + n, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
-  v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, 'data'); v.setUint32(40, n, true);
-  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
-  return URL.createObjectURL(new Blob([b], {type: 'audio/wav'}));
-}
+let unlocked = false;
 function unlockAudio() {
+  if (unlocked) return; unlocked = true;
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
   try {
-    if (!unlockEl) { unlockEl = new Audio(silentWavURL()); unlockEl.loop = true; unlockEl.setAttribute('playsinline', ''); }
-    const p = unlockEl.play(); if (p) p.catch(() => {});
+    const n = 8000 * 3, b = new ArrayBuffer(44 + n * 2), v = new DataView(b),
+      w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+    const el = document.getElementById('player');
+    el.src = URL.createObjectURL(new Blob([b], {type: 'audio/wav'})); el.loop = true;
+    const p = el.play(); if (p && p.catch) p.catch(() => {});
   } catch (e) {}
 }
 
@@ -549,7 +529,7 @@ async function start() {
     ctx.onstatechange = () => { if (playing && ctx.state !== 'running') ctx.resume().catch(() => {}); };
   }
   try { await ctx.resume(); } catch (e) { diag('resume failed: ' + e.message); }
-  if (S.alt && altEl) altEl.play().catch(e => diag('alt play failed: ' + e.message));
+  setTimeout(() => { if (playing && ctx.state !== 'running') diag('audio is ' + ctx.state + ' – tap play again'); }, 700);
   playing = true;
   step = 0; arpIdx = 0; lastPadCenter = 60;
   nextTime = ctx.currentTime + 0.15;
@@ -574,7 +554,7 @@ function stop(fromSleep) {
   out.master.gain.setValueAtTime(out.master.gain.value, now);
   out.master.gain.linearRampToValueAtTime(0, now + (fromSleep ? 0.3 : 1.8));
   releasePads(now);
-  setTimeout(() => { if (!playing) { ctx.suspend(); if (unlockEl) unlockEl.pause(); if (altEl) altEl.pause(); } }, 2200);
+  setTimeout(() => { if (!playing) { ctx.suspend(); } }, 2200);
   sleepEnd = 0; sleepFading = false;
   if (fromSleep) sleepMinutes = 0;
   releaseWake();
@@ -713,9 +693,9 @@ $('beepBtn').onclick = async () => {
     const t = ctx.currentTime;
     g.gain.linearRampToValueAtTime(0.3, t + 0.02); g.gain.setTargetAtTime(0, t + 0.6, 0.08);
     o.connect(g);
-    if (S.alt && altDest) { g.connect(altDest); altEl.play().catch(()=>{}); } else g.connect(ctx.destination);
+    g.connect(ctx.destination);
     o.start(t); o.stop(t + 1.2);
-    diag('beep sent (' + (S.alt ? 'alternative' : 'normal') + ' output)');
+    diag('beep sent');
   } catch (e) { diag('beep failed: ' + e.message); }
 };
 // Beep through a normal media player (no Web Audio at all)
@@ -729,8 +709,6 @@ $('mediaBeepBtn').onclick = () => {
   const a = new Audio(URL.createObjectURL(new Blob([b], {type: 'audio/wav'})));
   a.play().then(() => diag('media beep playing')).catch(e => diag('media beep failed: ' + e.message));
 };
-$('altSw').classList.toggle('on', S.alt);
-$('altSw').onclick = () => { S.alt = !S.alt; save(); $('altSw').classList.toggle('on', S.alt); routeOutput(); diag(S.alt ? 'alternative output on' : 'normal output'); };
 diag();
 $('wakeSw').classList.toggle('on', S.wake);
 $('wakeSw').onclick = () => {
